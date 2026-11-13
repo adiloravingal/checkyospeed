@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -390,6 +391,59 @@ var cdnAlias = map[string][]string{
 	"discord":   {"discord.com"},
 }
 
+// ---------- destinations: TLS certificate name ----------
+
+// ISP-hosted caches (Google Global Cache, Netflix OCA, Akamai) reverse-resolve to the
+// ISP, but their certificate names the real service. One handshake per IP, no SNI,
+// no data sent; cached for the session.
+var certs = &rdnsCache{names: map[string]string{}, pending: map[string]bool{}, sem: make(chan struct{}, 4)}
+
+func (r *rdnsCache) lookupWith(ip string, fn func(string) string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n, ok := r.names[ip]; ok {
+		return n
+	}
+	if !r.pending[ip] {
+		r.pending[ip] = true
+		go func() {
+			r.sem <- struct{}{}
+			defer func() { <-r.sem }()
+			n := fn(ip)
+			r.mu.Lock()
+			r.names[ip] = n
+			delete(r.pending, ip)
+			r.mu.Unlock()
+		}()
+	}
+	return ""
+}
+
+func certDomain(ip string) string {
+	d := &net.Dialer{Timeout: 2 * time.Second}
+	conn, err := tls.DialWithDialer(d, "tcp", net.JoinHostPort(ip, "443"),
+		&tls.Config{InsecureSkipVerify: true}) // only reading the name, never trusting it
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	st := conn.ConnectionState()
+	if len(st.PeerCertificates) == 0 {
+		return ""
+	}
+	leaf := st.PeerCertificates[0]
+	name := leaf.Subject.CommonName
+	if !strings.Contains(name, ".") && len(leaf.DNSNames) > 0 {
+		name = leaf.DNSNames[0]
+	}
+	name = strings.TrimPrefix(strings.ToLower(name), "*.")
+	if !strings.Contains(name, ".") || strings.Contains(name, "localhost") ||
+		strings.Contains(name, "invalid") || strings.Contains(name, "default") || net.ParseIP(name) != nil {
+		return ""
+	}
+	return regDomain(name)
+}
+
 // ---------- known IP ranges ----------
 
 // Coarse ownership of big networks, for IPs with no useful reverse DNS.
@@ -659,18 +713,23 @@ func (m model) labelFor(appName, ip string) (string, string) {
 			}
 		}
 	}
-	// informative PTR (e.g. googlevideo.com) > known IP range > any PTR > raw IP
+	// informative PTR (e.g. googlevideo.com) > TLS cert name > known IP range > any PTR > raw IP
 	label := ip
-	ptr := ""
+	ptr, cert := "", ""
 	if net.ParseIP(ip) == nil {
 		ptr = regDomain(ip) // nettop already gave a hostname
 	} else if p := rdns.lookup(ip); p != "" {
 		ptr = regDomain(p)
 	}
+	if !(ptr != "" && cdnAlias[ptr] != nil) && net.ParseIP(ip) != nil {
+		cert = certs.lookupWith(ip, certDomain)
+	}
 	org := orgFor(ip)
 	switch {
 	case ptr != "" && cdnAlias[ptr] != nil && ptr != "1e100.net":
 		label = ptr
+	case cert != "":
+		label = cert
 	case org != "":
 		label = org
 	case ptr != "":

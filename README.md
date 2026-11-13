@@ -36,7 +36,7 @@ macOS only (uses `nettop`, `networkQuality` and AppleScript, which ship with mac
 
 - **Live ↓/↑ totals** and a 60-second download sparkline. VPN/tunnel processes (Cloudflare WARP, WireGuard, …) are excluded so traffic isn't double-counted.
 - **Per-app table** with helpers folded into their parent ("Brave Browser Helper" → Brave). LAN chatter (AirDrop, mDNS, Jellyfin, …) is listed separately under `── local ──`.
-- **Destinations per app** as a tree, named from your open browser tabs, reverse DNS, or known provider IP ranges (google, cloudflare, aws, meta, …).
+- **Destinations per app** as a tree, named from your open browser tabs, reverse DNS, TLS certificate names (so ISP-hosted YouTube/Netflix caches show as the real service), or known provider IP ranges (google, cloudflare, aws, meta, …).
 - **Tab titles** for Brave, Chrome, Edge, Arc and Safari. Browsers route all tabs through one network process, so tabs are matched by the sites they're on. That makes it a best guess, not exact per-tab accounting.
 - **Ping**, idle vs under load. A red ▲ means latency triples under load (bufferbloat).
 - **Line quality**: `rough` when retransmits and out-of-order packets spike.
@@ -59,7 +59,10 @@ macOS only (uses `nettop`, `networkQuality` and AppleScript, which ship with mac
 ## Permissions & privacy
 
 - On first run macOS asks to let your terminal control your browser. That's how tab titles are read. If you decline, everything else still works.
-- Nothing is uploaded. The only traffic it creates is a ping to `1.1.1.1` every 2 s, plus Apple's speed-test servers when you press `t`.
+- Nothing is uploaded. The only traffic it creates is:
+  - a ping to `1.1.1.1` every 2 s
+  - Apple's speed-test servers when you press `t`
+  - one TLS handshake (no data sent) to each new server your apps are already talking to, to read the certificate name. This turns ISP-hosted caches like `segment-119-227.sify.net` into `googlevideo.com`.
 
 ## Build
 
